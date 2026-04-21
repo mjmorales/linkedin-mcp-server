@@ -137,6 +137,104 @@ def register_messaging_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         timeout=TOOL_TIMEOUT_SECONDS,
+        title="Mark Conversations As Read",
+        annotations={"openWorldHint": True},
+        tags={"messaging", "actions"},
+        exclude_args=["extractor"],
+    )
+    async def mark_conversations_as_read(
+        ctx: Context,
+        thread_ids: list[str] | None = None,
+        linkedin_usernames: list[str] | None = None,
+        extractor: Any | None = None,
+    ) -> dict[str, Any]:
+        """
+        Mark one or more conversations as read.
+
+        Delegates to get_conversation, which clears the unread marker as a side
+        effect of opening the thread. Provide thread_ids, linkedin_usernames, or
+        both; each entry is processed independently.
+
+        Args:
+            ctx: FastMCP context for progress reporting
+            thread_ids: LinkedIn messaging thread IDs to mark read
+            linkedin_usernames: LinkedIn usernames whose conversations to mark read
+
+        Returns:
+            Dict with results (list of {identifier, kind, status, error?}) and
+            counts of successes/failures.
+        """
+        targets: list[tuple[str, str]] = []
+        for tid in thread_ids or []:
+            targets.append(("thread_id", tid))
+        for uname in linkedin_usernames or []:
+            targets.append(("linkedin_username", uname))
+
+        if not targets:
+            raise_tool_error(
+                LinkedInScraperException(
+                    "Provide at least one thread_id or linkedin_username"
+                ),
+                "mark_conversations_as_read",
+            )
+
+        try:
+            extractor = extractor or await get_ready_extractor(
+                ctx, tool_name="mark_conversations_as_read"
+            )
+            logger.info("Marking %d conversation(s) as read", len(targets))
+
+            results: list[dict[str, Any]] = []
+            succeeded = 0
+            failed = 0
+
+            for idx, (kind, identifier) in enumerate(targets):
+                await ctx.report_progress(
+                    progress=idx,
+                    total=len(targets),
+                    message=f"Opening {kind}={identifier}",
+                )
+                try:
+                    kwargs = {kind: identifier}
+                    await extractor.get_conversation(**kwargs)
+                    results.append(
+                        {"identifier": identifier, "kind": kind, "status": "ok"}
+                    )
+                    succeeded += 1
+                except Exception as e:
+                    logger.warning(
+                        "Failed to mark %s=%s as read: %s", kind, identifier, e
+                    )
+                    results.append(
+                        {
+                            "identifier": identifier,
+                            "kind": kind,
+                            "status": "error",
+                            "error": str(e),
+                        }
+                    )
+                    failed += 1
+
+            await ctx.report_progress(
+                progress=len(targets), total=len(targets), message="Complete"
+            )
+
+            return {
+                "results": results,
+                "succeeded": succeeded,
+                "failed": failed,
+            }
+
+        except AuthenticationError as e:
+            try:
+                await handle_auth_error(e, ctx)
+            except Exception as relogin_exc:
+                raise_tool_error(relogin_exc, "mark_conversations_as_read")
+        except Exception as e:
+            raise_tool_error(e, "mark_conversations_as_read")  # NoReturn
+
+    @mcp.tool(
+        timeout=TOOL_TIMEOUT_SECONDS,
         title="Search Conversations",
         annotations={"readOnlyHint": True, "openWorldHint": True},
         tags={"messaging", "search"},
