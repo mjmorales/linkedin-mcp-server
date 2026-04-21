@@ -5,7 +5,7 @@ Provides inbox listing, conversation reading, message search, and sending.
 """
 
 import logging
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastmcp import Context, FastMCP
 from pydantic import Field
@@ -180,6 +180,58 @@ def register_messaging_tools(mcp: FastMCP) -> None:
                 raise_tool_error(relogin_exc, "search_conversations")
         except Exception as e:
             raise_tool_error(e, "search_conversations")  # NoReturn
+
+    @mcp.tool(
+        timeout=TOOL_TIMEOUT_SECONDS,
+        title="Get Pending Invitations",
+        annotations={"readOnlyHint": True, "openWorldHint": True},
+        tags={"network", "scraping"},
+        exclude_args=["extractor"],
+    )
+    async def get_pending_invitations(
+        ctx: Context,
+        invite_type: Literal["received", "sent"] = "received",
+        limit: Annotated[int, Field(ge=1, le=100)] = 20,
+        extractor: Any | None = None,
+    ) -> dict[str, Any]:
+        """
+        List pending LinkedIn connection invitations.
+
+        Args:
+            ctx: FastMCP context for progress reporting
+            invite_type: "received" for incoming invites, "sent" for outgoing (default "received")
+            limit: Maximum number of invitations to load (1-100, default 20)
+
+        Returns:
+            Dict with url, sections ({invite_type}_invitations -> raw text), and optional references.
+        """
+        try:
+            extractor = extractor or await get_ready_extractor(
+                ctx, tool_name="get_pending_invitations"
+            )
+            logger.info(
+                "Fetching pending invitations (type=%s, limit=%d)", invite_type, limit
+            )
+
+            await ctx.report_progress(
+                progress=0, total=100, message="Loading invitation manager"
+            )
+
+            result = await extractor.get_pending_invitations(
+                invite_type=invite_type, limit=limit
+            )
+
+            await ctx.report_progress(progress=100, total=100, message="Complete")
+
+            return result
+
+        except AuthenticationError as e:
+            try:
+                await handle_auth_error(e, ctx)
+            except Exception as relogin_exc:
+                raise_tool_error(relogin_exc, "get_pending_invitations")
+        except Exception as e:
+            raise_tool_error(e, "get_pending_invitations")  # NoReturn
 
     @mcp.tool(
         timeout=TOOL_TIMEOUT_SECONDS,

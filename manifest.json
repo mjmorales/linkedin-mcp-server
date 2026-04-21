@@ -94,6 +94,10 @@
       "description": "Send a message to a LinkedIn user with explicit confirmation and optional profile URN support"
     },
     {
+      "name": "get_pending_invitations",
+      "description": "List pending LinkedIn connection invitations (received or sent)"
+    },
+    {
       "name": "close_session",
       "description": "Properly close browser session and clean up resources"
     }

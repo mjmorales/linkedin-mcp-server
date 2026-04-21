@@ -2373,6 +2373,44 @@ class LinkedInExtractor:
             references=references,
         )
 
+    async def get_pending_invitations(
+        self,
+        invite_type: Literal["received", "sent"] = "received",
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """List pending LinkedIn connection invitations.
+
+        Scrapes the invitation manager page for received or sent invites.
+        """
+        if invite_type == "sent":
+            url = "https://www.linkedin.com/mynetwork/invitation-manager/sent/"
+        else:
+            url = "https://www.linkedin.com/mynetwork/invitation-manager/"
+
+        await self._navigate_to_page(url)
+        await detect_rate_limit(self._page)
+        await self._wait_for_main_text(log_context="Invitation manager")
+        await handle_modal_close(self._page)
+
+        scrolls = max(1, limit // 10)
+        await self._scroll_main_scrollable_region(
+            position="bottom", attempts=scrolls, pause_time=0.5
+        )
+
+        raw_result = await self._extract_root_content(["main"])
+        raw = raw_result["text"]
+        cleaned = strip_linkedin_noise(raw) if raw else ""
+        section_name = f"{invite_type}_invitations"
+        references: list[Reference] = (
+            build_references(raw_result["references"], section_name) if cleaned else []
+        )
+        return self._single_section_result(
+            url,
+            section_name,
+            cleaned,
+            references=references,
+        )
+
     async def send_message(
         self,
         linkedin_username: str,

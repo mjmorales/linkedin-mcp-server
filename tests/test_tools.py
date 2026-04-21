@@ -32,6 +32,7 @@ def _make_mock_extractor(scrape_result: dict) -> MagicMock:
     mock.get_inbox = AsyncMock(return_value=scrape_result)
     mock.get_conversation = AsyncMock(return_value=scrape_result)
     mock.search_conversations = AsyncMock(return_value=scrape_result)
+    mock.get_pending_invitations = AsyncMock(return_value=scrape_result)
     mock.send_message = AsyncMock(return_value=scrape_result)
     mock.extract_page = AsyncMock(
         return_value=ExtractedSection(text="some text", references=[])
@@ -655,6 +656,48 @@ class TestMessagingTools:
         assert result["sections"]["search_results"] == "Result 1\nResult 2"
         mock_extractor.search_conversations.assert_awaited_once_with("hello")
 
+    async def test_get_pending_invitations_success(self, mock_context):
+        expected = {
+            "url": "https://www.linkedin.com/mynetwork/invitation-manager/",
+            "sections": {"received_invitations": "Jane Doe\nJohn Smith"},
+        }
+        mock_extractor = _make_mock_extractor(expected)
+
+        from linkedin_mcp_server.tools.messaging import register_messaging_tools
+
+        mcp = FastMCP("test")
+        register_messaging_tools(mcp)
+
+        tool_fn = await get_tool_fn(mcp, "get_pending_invitations")
+        result = await tool_fn(mock_context, extractor=mock_extractor)
+
+        assert result["sections"]["received_invitations"] == "Jane Doe\nJohn Smith"
+        mock_extractor.get_pending_invitations.assert_awaited_once_with(
+            invite_type="received", limit=20
+        )
+
+    async def test_get_pending_invitations_sent(self, mock_context):
+        expected = {
+            "url": "https://www.linkedin.com/mynetwork/invitation-manager/sent/",
+            "sections": {"sent_invitations": "Outgoing 1"},
+        }
+        mock_extractor = _make_mock_extractor(expected)
+
+        from linkedin_mcp_server.tools.messaging import register_messaging_tools
+
+        mcp = FastMCP("test")
+        register_messaging_tools(mcp)
+
+        tool_fn = await get_tool_fn(mcp, "get_pending_invitations")
+        result = await tool_fn(
+            mock_context, invite_type="sent", limit=50, extractor=mock_extractor
+        )
+
+        assert result["sections"]["sent_invitations"] == "Outgoing 1"
+        mock_extractor.get_pending_invitations.assert_awaited_once_with(
+            invite_type="sent", limit=50
+        )
+
     async def test_send_message_success(self, mock_context):
         expected = {
             "url": "https://www.linkedin.com/messaging/thread/abc123/",
@@ -758,6 +801,7 @@ class TestToolTimeouts:
             "get_inbox",
             "get_conversation",
             "search_conversations",
+            "get_pending_invitations",
             "send_message",
             "close_session",
         )
