@@ -2411,6 +2411,100 @@ class LinkedInExtractor:
             references=references,
         )
 
+    async def ignore_invitation(
+        self,
+        linkedin_username: str,
+    ) -> dict[str, Any]:
+        """Dismiss a pending received invitation from ``linkedin_username``.
+
+        Loads the invitation manager, locates the invite card by its
+        profile link, then clicks the card-scoped Ignore button. A
+        post-click confirmation dialog (if LinkedIn shows one) is
+        accepted automatically.
+
+        Returns a dict with ``url``, ``status``, ``message`` and the
+        matched ``linkedin_username``.
+        """
+        url = "https://www.linkedin.com/mynetwork/invitation-manager/"
+
+        await self._navigate_to_page(url)
+        await detect_rate_limit(self._page)
+        await self._wait_for_main_text(log_context="Invitation manager (ignore)")
+        await handle_modal_close(self._page)
+
+        # Scroll so long pending lists hydrate before we try to locate the card.
+        await self._scroll_main_scrollable_region(
+            position="bottom", attempts=3, pause_time=0.5
+        )
+
+        profile_link = self._page.locator(
+            f'main a[href*="/in/{linkedin_username}/"]'
+        ).first
+        try:
+            await profile_link.wait_for(state="visible", timeout=5000)
+        except PlaywrightTimeoutError:
+            return {
+                "url": url,
+                "linkedin_username": linkedin_username,
+                "status": "not_found",
+                "message": (
+                    "No pending invitation found for this profile. It may have "
+                    "been withdrawn, already handled, or belongs to a non-default tab."
+                ),
+            }
+
+        card = profile_link.locator(
+            "xpath=ancestor::*[self::li or self::section or self::article][1]"
+        )
+        try:
+            await card.wait_for(state="visible", timeout=3000)
+        except PlaywrightTimeoutError:
+            return {
+                "url": url,
+                "linkedin_username": linkedin_username,
+                "status": "card_not_found",
+                "message": "Could not locate invitation card container.",
+            }
+
+        ignore_button = card.locator("button, [role='button']").filter(
+            has_text=re.compile(r"^\s*Ignore\s*$", re.IGNORECASE)
+        ).first
+        if await ignore_button.count() == 0:
+            return {
+                "url": url,
+                "linkedin_username": linkedin_username,
+                "status": "ignore_unavailable",
+                "message": "Invitation card did not expose an Ignore action.",
+            }
+
+        try:
+            await ignore_button.scroll_into_view_if_needed(timeout=3000)
+        except Exception:
+            logger.debug("Scroll failed for Ignore button", exc_info=True)
+        try:
+            await ignore_button.click(timeout=5000)
+        except Exception as exc:
+            logger.debug("Ignore click failed: %s", exc, exc_info=True)
+            return {
+                "url": url,
+                "linkedin_username": linkedin_username,
+                "status": "click_failed",
+                "message": f"Could not click Ignore: {exc}",
+            }
+
+        # LinkedIn may show a post-click confirmation dialog; confirm if present.
+        if await self._dialog_is_open(timeout=1500):
+            confirmed = await self._click_dialog_primary_button()
+            if not confirmed:
+                await self._dismiss_dialog()
+
+        return {
+            "url": url,
+            "linkedin_username": linkedin_username,
+            "status": "ignored",
+            "message": "Invitation ignored.",
+        }
+
     async def send_message(
         self,
         linkedin_username: str,

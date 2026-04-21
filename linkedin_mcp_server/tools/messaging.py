@@ -333,6 +333,56 @@ def register_messaging_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         timeout=TOOL_TIMEOUT_SECONDS,
+        title="Ignore Invitation",
+        annotations={"destructiveHint": True, "openWorldHint": True},
+        tags={"network", "actions"},
+        exclude_args=["extractor"],
+    )
+    async def ignore_invitation(
+        linkedin_username: str,
+        ctx: Context,
+        extractor: Any | None = None,
+    ) -> dict[str, Any]:
+        """
+        Dismiss a pending received LinkedIn connection invitation.
+
+        Locates the invite card for `linkedin_username` in the invitation
+        manager and clicks its Ignore button. No-op with a structured
+        status if the invite isn't present.
+
+        Args:
+            linkedin_username: LinkedIn username of the inviter (e.g. "margaretemons")
+            ctx: FastMCP context for progress reporting
+
+        Returns:
+            Dict with url, linkedin_username, status, and message.
+        """
+        try:
+            extractor = extractor or await get_ready_extractor(
+                ctx, tool_name="ignore_invitation"
+            )
+            logger.info("Ignoring invitation from %s", linkedin_username)
+
+            await ctx.report_progress(
+                progress=0, total=100, message="Opening invitation manager"
+            )
+
+            result = await extractor.ignore_invitation(linkedin_username)
+
+            await ctx.report_progress(progress=100, total=100, message="Complete")
+
+            return result
+
+        except AuthenticationError as e:
+            try:
+                await handle_auth_error(e, ctx)
+            except Exception as relogin_exc:
+                raise_tool_error(relogin_exc, "ignore_invitation")
+        except Exception as e:
+            raise_tool_error(e, "ignore_invitation")  # NoReturn
+
+    @mcp.tool(
+        timeout=TOOL_TIMEOUT_SECONDS,
         title="Send Message",
         annotations={"destructiveHint": True, "openWorldHint": True},
         tags={"messaging", "actions"},
