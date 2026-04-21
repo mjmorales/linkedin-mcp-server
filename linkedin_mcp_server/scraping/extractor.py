@@ -2339,8 +2339,17 @@ class LinkedInExtractor:
             references=references,
         )
 
-    async def search_conversations(self, keywords: str) -> dict[str, Any]:
-        """Search messages by keyword."""
+    async def search_conversations(
+        self, keywords: str, *, thread_id_limit: int = 15
+    ) -> dict[str, Any]:
+        """Search messages by keyword.
+
+        Also resolves thread IDs for each matched conversation by reusing
+        the inbox click-capture technique, since LinkedIn's conversation
+        list uses JS click handlers rather than anchor tags. Returned
+        references include a ``conversation`` entry per match with its
+        ``/messaging/thread/<id>/`` URL and participant name.
+        """
         await self._navigate_to_page("https://www.linkedin.com/messaging/")
         await detect_rate_limit(self._page)
         await handle_modal_close(self._page)
@@ -2361,11 +2370,26 @@ class LinkedInExtractor:
         raw_result = await self._extract_root_content(["main"])
         raw = raw_result["text"]
         cleaned = strip_linkedin_noise(raw) if raw else ""
-        references = (
+        references: list[Reference] = (
             build_references(raw_result["references"], "search_results")
             if cleaned
             else []
         )
+
+        # The search results panel renders <li> items with JS click handlers
+        # rather than anchor tags, so _extract_root_content cannot surface
+        # per-result thread IDs. Reuse the inbox capture technique, which
+        # clicks each visible conversation row and records the resulting
+        # SPA URL. Rows are re-tagged with context="search_results" so
+        # callers can distinguish them from ordinary inbox references.
+        search_thread_refs = await self._extract_conversation_thread_refs(
+            thread_id_limit
+        )
+        for ref in search_thread_refs:
+            ref["context"] = "search_results"
+        if search_thread_refs:
+            references = dedupe_references(search_thread_refs + references)
+
         return self._single_section_result(
             self._page.url,
             "search_results",
