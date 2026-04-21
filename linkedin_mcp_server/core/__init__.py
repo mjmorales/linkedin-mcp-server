@@ -11,17 +11,20 @@ from .auth import (
 from .browser import BrowserManager
 from .exceptions import (
     AuthenticationError,
+    BrowserDeadError,
     ElementNotFoundError,
     LinkedInScraperException,
     NetworkError,
     ProfileNotFoundError,
     RateLimitError,
     ScrapingError,
+    ServerBusyError,
 )
 from .utils import detect_rate_limit, handle_modal_close, scroll_to_bottom
 
 __all__ = [
     "AuthenticationError",
+    "BrowserDeadError",
     "BrowserManager",
     "detect_auth_barrier",
     "detect_auth_barrier_quick",
@@ -31,6 +34,7 @@ __all__ = [
     "ProfileNotFoundError",
     "RateLimitError",
     "ScrapingError",
+    "ServerBusyError",
     "detect_rate_limit",
     "handle_modal_close",
     "is_logged_in",

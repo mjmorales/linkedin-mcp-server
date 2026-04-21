@@ -15,7 +15,7 @@ from linkedin_mcp_server.core.exceptions import AuthenticationError, NetworkErro
 from linkedin_mcp_server.drivers.browser import (
     close_browser,
     ensure_authenticated,
-    get_or_create_browser,
+    ensure_browser_ready,
 )
 from linkedin_mcp_server.error_handler import raise_tool_error
 from linkedin_mcp_server.exceptions import (
@@ -71,7 +71,7 @@ async def get_ready_extractor(
     """Run bootstrap gating, then acquire an authenticated extractor."""
     try:
         await ensure_tool_ready_or_raise(tool_name, ctx)
-        browser = await get_or_create_browser()
+        browser = await ensure_browser_ready()
         await ensure_authenticated()
         return LinkedInExtractor(browser.page)
     except AuthenticationError as e:

@@ -13,12 +13,14 @@ from fastmcp.exceptions import ToolError
 
 from linkedin_mcp_server.core.exceptions import (
     AuthenticationError,
+    BrowserDeadError,
     ElementNotFoundError,
     LinkedInScraperException,
     NetworkError,
     ProfileNotFoundError,
     RateLimitError,
     ScrapingError,
+    ServerBusyError,
 )
 
 from linkedin_mcp_server.exceptions import (
@@ -39,6 +41,36 @@ from linkedin_mcp_server.error_diagnostics import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+_BROWSER_DEAD_SIGNATURES = (
+    "target page, context or browser has been closed",
+    "browser has been closed",
+    "browser closed",
+    "target closed",
+    "connection closed",
+    "websocket closed",
+    "page closed",
+    "page, context or browser has been closed",
+    "browser has disconnected",
+    "execution context was destroyed",
+)
+
+
+def _looks_like_browser_dead(exc: Exception) -> bool:
+    """Heuristic: detect Patchright/Playwright transport-dead errors by
+    exception class name or message, without importing the types directly
+    (keeps this module import-light and tolerant of upstream renames).
+    """
+    if isinstance(exc, (BrokenPipeError, ConnectionResetError, EOFError)):
+        return True
+    cls = type(exc).__name__
+    if cls in {"TargetClosedError", "Error"} and cls.startswith("Target"):
+        return True
+    if cls in {"TargetClosedError"}:
+        return True
+    message = str(exc).lower()
+    return any(sig in message for sig in _BROWSER_DEAD_SIGNATURES)
 
 
 def _raise_tool_error_with_diagnostics(
@@ -150,6 +182,17 @@ def raise_tool_error(exception: Exception, context: str = "") -> NoReturn:
             context=context,
         )
 
+    elif isinstance(exception, BrowserDeadError):
+        logger.warning("Browser dead%s: %s", ctx, exception)
+        _mark_browser_dead_safely()
+        raise ToolError(
+            "Browser session was lost and will be rebuilt on the next call. Retry this tool."
+        ) from exception
+
+    elif isinstance(exception, ServerBusyError):
+        logger.info("Server busy%s: %s", ctx, exception)
+        raise ToolError(str(exception)) from exception
+
     elif isinstance(exception, NetworkError):
         logger.warning("Network error%s: %s", ctx, exception)
         _raise_tool_error_with_diagnostics(
@@ -176,6 +219,30 @@ def raise_tool_error(exception: Exception, context: str = "") -> NoReturn:
             context=context,
         )
 
+    elif _looks_like_browser_dead(exception):
+        logger.warning(
+            "Browser transport error%s (%s): %s",
+            ctx,
+            type(exception).__name__,
+            exception,
+        )
+        _mark_browser_dead_safely()
+        raise ToolError(
+            "Browser session was lost and will be rebuilt on the next call. Retry this tool."
+        ) from exception
+
     else:
         logger.error("Unexpected error%s: %s", ctx, exception, exc_info=True)
-        raise exception
+        raise ToolError(
+            f"Unexpected error{ctx}: {type(exception).__name__}"
+        ) from exception
+
+
+def _mark_browser_dead_safely() -> None:
+    """Flag the shared browser as dead, avoiding import cycles at startup."""
+    try:
+        from linkedin_mcp_server.drivers.browser import mark_browser_dead
+
+        mark_browser_dead()
+    except Exception:
+        logger.debug("Could not mark browser dead", exc_info=True)

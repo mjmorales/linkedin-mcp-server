@@ -8,17 +8,34 @@ import time
 
 import mcp.types as mt
 
+from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools import ToolResult
+
+from linkedin_mcp_server.error_handler import (
+    _looks_like_browser_dead,
+    _mark_browser_dead_safely,
+)
 
 logger = logging.getLogger(__name__)
 
 
-class SequentialToolExecutionMiddleware(Middleware):
-    """Ensure only one MCP tool call executes at a time per server process."""
+DEFAULT_LOCK_WAIT_SECONDS = 90.0
 
-    def __init__(self) -> None:
+
+class SequentialToolExecutionMiddleware(Middleware):
+    """Ensure only one MCP tool call executes at a time per server process.
+
+    Also short-circuits when the lock would be held beyond
+    ``lock_wait_seconds`` so a stuck tool doesn't starve the queue, and
+    converts transport-dead browser exceptions into structured ToolErrors
+    (flagging the browser for rebuild) instead of letting them crash the
+    stdio pipe.
+    """
+
+    def __init__(self, lock_wait_seconds: float = DEFAULT_LOCK_WAIT_SECONDS) -> None:
         self._lock = asyncio.Lock()
+        self._lock_wait_seconds = lock_wait_seconds
 
     async def _report_progress(
         self,
@@ -49,7 +66,23 @@ class SequentialToolExecutionMiddleware(Middleware):
             message="Queued waiting for scraper lock",
         )
 
-        async with self._lock:
+        try:
+            await asyncio.wait_for(
+                self._lock.acquire(), timeout=self._lock_wait_seconds
+            )
+        except asyncio.TimeoutError:
+            wait_seconds = time.perf_counter() - wait_started
+            logger.warning(
+                "Scraper lock wait timed out for tool '%s' after %.1fs",
+                tool_name,
+                wait_seconds,
+            )
+            raise ToolError(
+                f"Server busy: another tool has held the scraper lock for "
+                f">{self._lock_wait_seconds:.0f}s. Retry shortly."
+            ) from None
+
+        try:
             wait_seconds = time.perf_counter() - wait_started
             logger.debug(
                 "Acquired scraper lock for tool '%s' after %.3fs",
@@ -63,6 +96,22 @@ class SequentialToolExecutionMiddleware(Middleware):
             hold_started = time.perf_counter()
             try:
                 return await call_next(context)
+            except ToolError:
+                raise
+            except Exception as exc:
+                if _looks_like_browser_dead(exc):
+                    logger.warning(
+                        "Browser transport error in tool '%s' (%s): %s",
+                        tool_name,
+                        type(exc).__name__,
+                        exc,
+                    )
+                    _mark_browser_dead_safely()
+                    raise ToolError(
+                        "Browser session was lost and will be rebuilt on the "
+                        "next call. Retry this tool."
+                    ) from exc
+                raise
             finally:
                 hold_seconds = time.perf_counter() - hold_started
                 logger.debug(
@@ -70,3 +119,5 @@ class SequentialToolExecutionMiddleware(Middleware):
                     tool_name,
                     hold_seconds,
                 )
+        finally:
+            self._lock.release()

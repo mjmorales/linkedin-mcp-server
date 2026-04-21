@@ -14,6 +14,7 @@ from linkedin_mcp_server.common_utils import secure_mkdir
 from linkedin_mcp_server.core import (
     AuthenticationError,
     BrowserManager,
+    NetworkError,
     detect_auth_barrier_quick,
     detect_rate_limit,
     is_logged_in,
@@ -492,6 +493,7 @@ async def close_browser() -> None:
     cookie_export_path = _browser_cookie_export_path
     _browser = None
     _browser_cookie_export_path = None
+    _clear_browser_dead_flag()
 
     if browser is None:
         return
@@ -504,6 +506,68 @@ async def close_browser() -> None:
             logger.debug("Cookie export on close skipped", exc_info=True)
     await browser.close()
     logger.info("Browser closed")
+
+
+_browser_dead_flag: bool = False
+
+
+def mark_browser_dead() -> None:
+    """Mark the shared browser as unusable.
+
+    The next call to ``ensure_browser_ready`` will tear down and rebuild the
+    instance before returning. Safe to call from any context.
+    """
+    global _browser_dead_flag
+    if not _browser_dead_flag:
+        logger.warning("Browser marked dead; will rebuild on next tool call")
+    _browser_dead_flag = True
+
+
+def _clear_browser_dead_flag() -> None:
+    global _browser_dead_flag
+    _browser_dead_flag = False
+
+
+def is_browser_dead_flag_set() -> bool:
+    return _browser_dead_flag
+
+
+async def is_browser_alive() -> bool:
+    """Best-effort liveness probe for the shared browser.
+
+    Returns False when the singleton is absent, its page is closed, or a
+    trivial evaluate round-trip fails — any of which indicate the CDP
+    transport is gone and the next scrape will fault.
+    """
+    browser = _browser
+    if browser is None:
+        return False
+    try:
+        page = browser.page
+        if page.is_closed():
+            return False
+        await page.evaluate("1")
+        return True
+    except Exception as exc:
+        logger.debug("Browser liveness probe failed: %s", exc)
+        return False
+
+
+async def ensure_browser_ready() -> BrowserManager:
+    """Return a live browser, tearing down and rebuilding if the current
+    instance is dead or has been flagged dead by a prior failure.
+
+    Rebuild is attempted at most once per call; if the fresh instance also
+    fails the probe, the underlying exception is surfaced.
+    """
+    browser = await get_or_create_browser()
+    if is_browser_dead_flag_set() or not await is_browser_alive():
+        logger.warning("Dead browser detected; rebuilding")
+        await close_browser()
+        browser = await get_or_create_browser()
+        if not await is_browser_alive():
+            raise NetworkError("Browser failed to start after rebuild")
+    return browser
 
 
 def get_profile_dir() -> Path:

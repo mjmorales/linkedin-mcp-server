@@ -43,3 +43,19 @@ class ScrapingError(LinkedInScraperException):
     """Raised when scraping fails for various reasons."""
 
     pass
+
+
+class BrowserDeadError(LinkedInScraperException):
+    """Raised when the browser/driver is unresponsive, closed, or crashed.
+
+    Distinguished from NetworkError so the runtime can tear down and rebuild
+    the shared browser instead of surfacing a transient network blip.
+    """
+
+    pass
+
+
+class ServerBusyError(LinkedInScraperException):
+    """Raised when a tool call cannot acquire the serialization lock in time."""
+
+    pass
